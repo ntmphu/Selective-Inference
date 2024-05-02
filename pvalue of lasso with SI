@@ -1,0 +1,134 @@
+from sklearn import linear_model
+import numpy as np
+import random
+import scipy.stats as stats
+import matplotlib.pyplot as plt
+
+#generate data
+def generate(n, p, true_beta):
+    X = np.random.normal(loc=0, scale=1, size=(n, p))
+    true_beta = np.reshape(true_beta, (p, 1))
+    true_y = np.dot(X, true_beta)
+    noise = np.random.normal(loc=0, scale=1, size=(n, 1))
+    y = true_y + noise
+    return X, y.flatten(), true_y.flatten()
+
+def run():
+    n=100
+    p=6
+    true_beta=[0]*p
+    x, y, true_y = generate (n,p,true_beta)
+
+    lamda=0.05
+    lasso = linear_model.Lasso(alpha=lamda, fit_intercept=False, tol=1e-10)
+    lasso.fit(x,y)
+
+    p=lasso.coef_
+
+    M=[i for i in range(len(p)) if p[i]!=0]
+    Mminus=[i for i in range(len(p)) if p[i]==0]
+    if len(M) == 0:
+        return None
+
+    
+    x, y = np.array(x), np.array(y)
+    xM=x[:,M]
+    xMminus=x[:,Mminus]
+    inv_xMTxM=np.linalg.pinv(np.dot(xM.T, xM))
+    etaT_all=np.dot(inv_xMTxM,xM.T)
+    etaTy_all=np.dot(etaT_all, y)
+
+    #test statistic
+    j=np.random.randint(len(M))
+    e=np.zeros((1,len(M)))
+    e[:,j]=1
+    etaT=np.dot(e, etaT_all) #etaTj
+    eta=np.transpose(etaT)
+    etaTy=np.dot(etaT, y)
+  
+
+    #s,c,z,A,b
+    Sigma = np.identity(n) #cov
+    etaT_Sigma_eta=np.dot(np.dot(etaT, Sigma), eta)
+    c = np.dot(np.dot(Sigma, eta), np.linalg.inv(etaT_Sigma_eta))
+    z = np.dot(np.identity(n) - np.dot(c,etaT), y)
+    s=np.array(np.sign(etaTy_all))
+    
+
+    alpha=lamda*n
+    pM=np.dot(np.dot(xM,inv_xMTxM), xM.T)
+    xTMplus=np.dot(xM,inv_xMTxM)
+
+    A0_1=(1/alpha)*np.dot(xMminus.T, np.identity(n)-pM)
+    A0_2=(-1/alpha)*np.dot(xMminus.T, np.identity(n)-pM)
+    A1=(-1)*np.dot(np.diag(s),etaT_all)    
+    A=np.vstack((A0_1,A0_2,A1))
+
+    b0_1=1-np.dot(np.dot(xMminus.T, xTMplus), s)
+    b0_2=1+np.dot(np.dot(xMminus.T, xTMplus), s)
+    b1=(-alpha)*np.dot(np.dot(np.diag(s),inv_xMTxM), s)
+    #print(b0_1.reshape(-1,1).shape, b0_2.shape, b1.shape)
+    b=np.vstack((b0_1.reshape(-1,1), b0_2.reshape(-1,1),b1.reshape(-1,1)))
+    
+
+    #c,Az,Ac,Vminus,Vplus
+    c=c.flatten()
+    Ac=np.dot(A, c)
+    Az=np.dot(A,z)
+    #print(b.shape, Az.shape, Ac.shape, etaTy.shape)
+    Vminus = np.NINF
+    Vplus = np.Inf
+
+    for j in range(len(b)):
+        
+        if - 1e-10 <= Ac[j] <= 1e-10:
+            
+            if b[j]-Az[j] < 0:
+                print('Error')
+        else:
+            temp = (b[j]-Az[j]) / Ac[j]
+
+            if Ac[j] > 0:
+                Vplus = min(temp, Vplus)
+            else:
+                Vminus = max(temp, Vminus)
+    if not (Vminus<=etaTy<=Vplus):
+        print("Error")
+
+
+    #calculate selective p-value
+    tn_mu = np.dot(etaT, true_y)[0]
+    tn_sigma = np.sqrt(etaT_Sigma_eta)[0][0]
+    cdf=stats.truncnorm.cdf(etaTy, Vminus, Vplus,loc=tn_mu, scale=tn_sigma)
+    selective_p_value = 2 * min(cdf, 1 - cdf)
+    
+    return selective_p_value[0]
+if __name__ == '__main__':
+    # run()
+
+    max_iteration = 1000
+    list_p_value = []
+
+    Alpha = 0.05
+    count = 0
+
+    for iter in range(max_iteration):
+        if iter % 100 == 0:
+            print(iter)
+
+        selective_p_value = run()
+        if selective_p_value is not None:     
+            list_p_value.append(selective_p_value)
+
+            if selective_p_value <= Alpha:
+                count = count + 1
+    
+    print()
+    print('False positive rate:', count / max_iteration)
+    print(list_p_value)
+    print(stats.kstest(list_p_value, stats.norm(loc=0.0, scale=1.0).cdf))
+
+    plt.hist(list_p_value, bins=5)
+    plt.show()
+    
+
